@@ -376,6 +376,7 @@ func start
 ```env
 AzureWebJobsStorage=<your-storage-connection-string>
 FUNCTIONS_WORKER_RUNTIME=node
+APPLICATIONINSIGHTS_CONNECTION_STRING=<your-app-insights-connection-string>
 COSMOS_DB_URI=<your-cosmos-mongo-connection-string>
 COSMOS_DB_NAME=insurance-management
 OCR_RESULTS_COLLECTION=ocrresults
@@ -402,6 +403,39 @@ COSMOS_DB_URI=<your-cosmos-mongo-connection-string>
    - OCR text is stored in Cosmos DB
    - the application record changes to `COMPLETED` or `FAILED`
    - Admin Dashboard and Application Reviews show the OCR status
+
+## Azure Function Logs And Monitor
+
+If the Function App does not show logs or Monitor entries, the most common causes are:
+
+1. Application Insights is not connected.
+   - Function Monitor is backed by Application Insights telemetry.
+   - Set `APPLICATIONINSIGHTS_CONNECTION_STRING` on the Function App.
+
+2. The blob trigger is not loading.
+   - For the sample project, `host.json` must include the `extensionBundle` reference for storage triggers.
+   - The sample in `azure-functions/pdf-ocr-blob-trigger/host.json` now includes it.
+
+3. The function never actually triggers.
+   - The blob path in [PdfOcrBlobTrigger/function.json](C:/Users/Admin/Desktop/Insurance/azure-functions/pdf-ocr-blob-trigger/PdfOcrBlobTrigger/function.json:1) is `insurance-documents/{name}`.
+   - Your uploaded PDF must land in that exact container.
+
+4. `AzureWebJobsStorage` is wrong.
+   - Blob triggers depend on the host storage account.
+   - Make sure `AzureWebJobsStorage` points to a general-purpose storage account.
+
+5. Private networking blocks telemetry or management visibility.
+   - If the Function App is private, portal experiences may be limited.
+   - In that case, confirm logs in Application Insights directly.
+
+Useful checks:
+
+- Open Function App `Functions` and verify the blob-trigger function is listed.
+- Open `Monitor` after a real blob upload, not just after deployment.
+- Open `Log stream` and upload a new PDF.
+- Open Application Insights and run queries against traces and requests.
+
+If Monitor is still blank but the function is working, check Application Insights first, because the monitor view depends on that telemetry pipeline.
 
 ## OCR Integration Notes
 
