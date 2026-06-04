@@ -149,7 +149,21 @@ const ApplyInsurancePage = () => {
                 <div key={doc.blobName} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <p>{doc.name}</p>
                   <p className="mt-1 text-sm text-white/60">{doc.fileName}</p>
+                  {doc.ocr?.status === 'completed' && (
+                    <p className="mt-2 text-sm text-white/60">OCR completed for this PDF.</p>
+                  )}
+                  {doc.ocr?.status === 'failed' && (
+                    <p className="mt-2 text-sm text-white/60">OCR failed: {doc.ocr.message || 'Unknown error'}</p>
+                  )}
+                  {doc.ocr?.status === 'skipped' && (
+                    <p className="mt-2 text-sm text-white/60">OCR skipped: {doc.ocr.message}</p>
+                  )}
                   <a className="text-sm text-white/60" href={doc.url} rel="noreferrer" target="_blank">Open document</a>
+                  {doc.ocr?.extractedText && (
+                    <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-2xl border border-white/10 bg-white/5 p-3 text-xs text-white/70">
+                      {doc.ocr.extractedText}
+                    </pre>
+                  )}
                 </div>
               ))}
             </div>

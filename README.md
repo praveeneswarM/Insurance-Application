@@ -72,6 +72,8 @@ COSMOS_DB_URI=
 JWT_SECRET=
 AZURE_STORAGE_CONNECTION_STRING=
 AZURE_CONTAINER_NAME=
+AZURE_OCR_FUNCTION_URL=
+AZURE_OCR_FUNCTION_KEY=
 CLIENT_URL=http://localhost:5173
 NODE_ENV=development
 ```
@@ -278,6 +280,273 @@ npm run build
 - Create a private blob container named `insurance-documents`.
 - Add the connection string to `AZURE_STORAGE_CONNECTION_STRING`.
 - Set `AZURE_CONTAINER_NAME=insurance-documents`.
+
+## Azure Function OCR
+
+This project can be extended with a separate Azure Function for OCR. In the current backend flow, OCR is automatically triggered whenever a PDF is uploaded through `POST /api/upload`.
+
+Current PDF flow:
+
+- upload the document from the app
+- store the PDF in Azure Blob Storage
+- detect that the uploaded file is a PDF
+- call the configured Azure OCR Function from the backend
+- let the function call Azure AI Vision Read API
+- return extracted text to the backend
+- include OCR metadata and extracted text in the uploaded document response
+
+Microsoft Learn notes that Node.js Azure Functions v4 usually configure triggers in code instead of `function.json`. Since you asked for `function.json`, the example below uses the classic Node function folder layout, which is still a familiar pattern for HTTP-triggered functions. Source references:
+- Azure Functions HTTP trigger: https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-http-webhook-trigger
+- Node.js Azure Functions reference: https://learn.microsoft.com/en-us/azure/azure-functions/functions-reference-node
+- Azure AI Vision Read API: https://learn.microsoft.com/en-us/rest/api/computervision/read/read?view=rest-computervision-v3.1
+
+### OCR Function Structure
+
+```text
+ocr-function-app/
+|-- host.json
+|-- package.json
+|-- local.settings.json
+`-- OcrHttpTrigger/
+    |-- function.json
+    `-- index.js
+```
+
+### `function.json`
+
+```json
+{
+  "bindings": [
+    {
+      "authLevel": "function",
+      "type": "httpTrigger",
+      "direction": "in",
+      "name": "req",
+      "methods": ["post"],
+      "route": "ocr"
+    },
+    {
+      "type": "http",
+      "direction": "out",
+      "name": "res"
+    }
+  ]
+}
+```
+
+### `index.js`
+
+```javascript
+const axios = require('axios');
+
+module.exports = async function (context, req) {
+  try {
+    const documentUrl = req.body?.documentUrl;
+
+    if (!documentUrl) {
+      context.res = {
+        status: 400,
+        body: {
+          success: false,
+          message: 'documentUrl is required'
+        }
+      };
+      return;
+    }
+
+    const endpoint = process.env.AZURE_VISION_ENDPOINT;
+    const key = process.env.AZURE_VISION_KEY;
+
+    if (!endpoint || !key) {
+      context.res = {
+        status: 500,
+        body: {
+          success: false,
+          message: 'Azure Vision settings are missing'
+        }
+      };
+      return;
+    }
+
+    const submitResponse = await axios.post(
+      `${endpoint}/vision/v3.1/read/analyze`,
+      { url: documentUrl },
+      {
+        headers: {
+          'Ocp-Apim-Subscription-Key': key,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const operationLocation = submitResponse.headers['operation-location'];
+
+    if (!operationLocation) {
+      context.res = {
+        status: 500,
+        body: {
+          success: false,
+          message: 'OCR operation location was not returned'
+        }
+      };
+      return;
+    }
+
+    let result;
+    let attempts = 0;
+
+    while (attempts < 15) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      const pollResponse = await axios.get(operationLocation, {
+        headers: {
+          'Ocp-Apim-Subscription-Key': key
+        }
+      });
+
+      result = pollResponse.data;
+
+      if (result.status === 'succeeded' || result.status === 'failed') {
+        break;
+      }
+
+      attempts += 1;
+    }
+
+    if (!result || result.status !== 'succeeded') {
+      context.res = {
+        status: 500,
+        body: {
+          success: false,
+          message: 'OCR processing failed or timed out',
+          result
+        }
+      };
+      return;
+    }
+
+    const extractedText =
+      result.analyzeResult?.readResults
+        ?.flatMap((page) => page.lines.map((line) => line.text))
+        .join('\n') || '';
+
+    context.res = {
+      status: 200,
+      body: {
+        success: true,
+        extractedText,
+        raw: result
+      }
+    };
+  } catch (error) {
+    context.log('OCR function failed', error.message);
+    context.res = {
+      status: 500,
+      body: {
+        success: false,
+        message: error.response?.data || error.message
+      }
+    };
+  }
+};
+```
+
+### OCR Function `package.json`
+
+```json
+{
+  "name": "ocr-function-app",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "func start"
+  },
+  "dependencies": {
+    "axios": "^1.7.7"
+  }
+}
+```
+
+### `host.json`
+
+```json
+{
+  "version": "2.0"
+}
+```
+
+### `local.settings.json`
+
+```json
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AZURE_VISION_ENDPOINT": "https://<your-vision-resource>.cognitiveservices.azure.com",
+    "AZURE_VISION_KEY": "<your-vision-key>"
+  }
+}
+```
+
+## Steps To Do OCR Using Azure Functions
+
+1. Create an Azure AI Vision resource in Azure Portal.
+2. Copy the endpoint and key from the Azure AI Vision resource.
+3. Install Azure Functions Core Tools locally.
+4. Create a new Node.js Azure Function app.
+5. Add the `function.json`, `index.js`, `host.json`, and `package.json` shown above.
+6. Add `AZURE_VISION_ENDPOINT` and `AZURE_VISION_KEY` to `local.settings.json` for local testing.
+7. Start the function locally:
+
+```bash
+func start
+```
+
+8. Call the function locally:
+
+```bash
+curl -X POST http://localhost:7071/api/ocr \
+  -H "Content-Type: application/json" \
+  -d "{\"documentUrl\":\"https://example.com/sample.pdf\"}"
+```
+
+9. Deploy the function to Azure:
+
+```bash
+func azure functionapp publish <your-function-app-name>
+```
+
+10. In Azure, set the same app settings on the Function App:
+   - `AZURE_VISION_ENDPOINT`
+   - `AZURE_VISION_KEY`
+   - copy the function URL or function host + route
+   - copy the function key if the function uses `authLevel: function`
+
+11. Update the backend application settings:
+
+```env
+AZURE_OCR_FUNCTION_URL=https://<your-function-app>.azurewebsites.net/api/ocr
+AZURE_OCR_FUNCTION_KEY=<your-function-key>
+```
+
+12. If your documents are already uploaded to Blob Storage, pass the Blob URL to the OCR function instead of uploading the same file again.
+
+13. Restart the backend after adding the OCR settings.
+
+14. Upload a PDF through the insurance application UI. The backend will:
+   - upload the PDF to Blob Storage
+   - call the Azure OCR Function automatically
+   - attach the OCR response to the uploaded document metadata
+
+## OCR Integration Notes
+
+- The sample above uses the Azure AI Vision Read API for OCR.
+- The backend currently triggers OCR only for PDF uploads. JPG, JPEG, and PNG files are uploaded normally without OCR.
+- If your documents are mostly forms, invoices, or structured PDFs, Azure AI Document Intelligence may be a better fit than plain OCR.
+- If your Blob URLs are private, use SAS URLs or let the function download the blob using Azure Storage credentials before sending it to Azure AI Vision.
+- For private Azure architectures, the Function App and Vision resource may also need private networking and DNS alignment.
 
 ## Docker Setup
 

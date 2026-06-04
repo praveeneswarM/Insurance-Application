@@ -11,7 +11,13 @@ const createApplicationSchema = Joi.object({
         mimeType: Joi.string().required(),
         size: Joi.number().required(),
         url: Joi.string().uri().required(),
-        blobName: Joi.string().required()
+        blobName: Joi.string().required(),
+        ocr: Joi.object({
+          attempted: Joi.boolean().default(false),
+          status: Joi.string().default('not_applicable'),
+          message: Joi.string().allow('').default(''),
+          extractedText: Joi.string().allow('').default('')
+        }).optional()
       })
     )
     .min(1)

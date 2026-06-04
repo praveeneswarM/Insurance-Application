@@ -8,7 +8,13 @@ const documentSchema = new mongoose.Schema(
     mimeType: { type: String, required: true },
     size: { type: Number, required: true },
     url: { type: String, required: true },
-    blobName: { type: String, required: true }
+    blobName: { type: String, required: true },
+    ocr: {
+      attempted: { type: Boolean, default: false },
+      status: { type: String, default: 'not_applicable' },
+      message: { type: String, default: '' },
+      extractedText: { type: String, default: '' }
+    }
   },
   { _id: false }
 );

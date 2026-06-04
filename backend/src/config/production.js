@@ -5,5 +5,7 @@ module.exports = {
   nodeEnv: 'production',
   clientUrl: process.env.CLIENT_URL || '',
   azureStorageConnectionString: process.env.AZURE_STORAGE_CONNECTION_STRING || '',
-  azureContainerName: process.env.AZURE_CONTAINER_NAME || 'insurance-documents'
+  azureContainerName: process.env.AZURE_CONTAINER_NAME || 'insurance-documents',
+  azureOcrFunctionUrl: process.env.AZURE_OCR_FUNCTION_URL || '',
+  azureOcrFunctionKey: process.env.AZURE_OCR_FUNCTION_KEY || ''
 };
