@@ -1,0 +1,12 @@
+{
+  "name": "pdf-ocr-blob-trigger",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "func start"
+  },
+  "dependencies": {
+    "mongodb": "^6.8.0",
+    "pdf-parse": "^1.1.1"
+  }
+}

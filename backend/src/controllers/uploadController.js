@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const asyncHandler = require('../middlewares/asyncHandler');
 const { uploadBuffer, deleteBlob } = require('../services/blobService');
-const { isPdf, runPdfOcr } = require('../services/ocrService');
+const { getInitialDocumentOcrState } = require('../services/ocrService');
 
 const uploadDocument = asyncHandler(async (req, res) => {
   const file = req.file;
@@ -13,18 +13,10 @@ const uploadDocument = asyncHandler(async (req, res) => {
     contentType: file.mimetype
   });
 
-  const ocr = isPdf(file.mimetype, file.originalname)
-    ? await runPdfOcr({
-        documentUrl: uploaded.url,
-        fileName: file.originalname,
-        documentName: docName
-      })
-    : {
-        attempted: false,
-        status: 'not_applicable',
-        message: 'OCR is only triggered for PDF files',
-        extractedText: ''
-      };
+  const ocr = getInitialDocumentOcrState({
+    mimeType: file.mimetype,
+    fileName: file.originalname
+  });
 
   res.status(201).json({
     success: true,
@@ -35,7 +27,7 @@ const uploadDocument = asyncHandler(async (req, res) => {
       size: file.size,
       url: uploaded.url,
       blobName: uploaded.blobName,
-      ocr
+      ...ocr
     }
   });
 });

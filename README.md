@@ -72,8 +72,6 @@ COSMOS_DB_URI=
 JWT_SECRET=
 AZURE_STORAGE_CONNECTION_STRING=
 AZURE_CONTAINER_NAME=
-AZURE_OCR_FUNCTION_URL=
-AZURE_OCR_FUNCTION_KEY=
 CLIENT_URL=http://localhost:5173
 NODE_ENV=development
 ```
@@ -283,200 +281,73 @@ npm run build
 
 ## Azure Function OCR
 
-This project can be extended with a separate Azure Function for OCR. In the current backend flow, OCR is automatically triggered whenever a PDF is uploaded through `POST /api/upload`.
+The application now uses a blob-trigger OCR workflow for PDFs:
 
-Current PDF flow:
+1. User uploads a PDF with `POST /api/upload`
+2. Backend stores it in Azure Blob Storage
+3. Backend marks the document OCR state as `PENDING`
+4. Azure Function Blob Trigger runs automatically when the blob lands
+5. Function extracts text with `pdf-parse`
+6. Function saves OCR state in Cosmos DB
+7. Function updates the matching insurance application record
+8. Admin and user views show `PENDING`, `PROCESSING`, `COMPLETED`, or `FAILED`
 
-- upload the document from the app
-- store the PDF in Azure Blob Storage
-- detect that the uploaded file is a PDF
-- call the configured Azure OCR Function from the backend
-- let the function call Azure AI Vision Read API
-- return extracted text to the backend
-- include OCR metadata and extracted text in the uploaded document response
+This architecture does not use an HTTP trigger, `AZURE_OCR_FUNCTION_URL`, or `AZURE_OCR_FUNCTION_KEY`.
 
-Microsoft Learn notes that Node.js Azure Functions v4 usually configure triggers in code instead of `function.json`. Since you asked for `function.json`, the example below uses the classic Node function folder layout, which is still a familiar pattern for HTTP-triggered functions. Source references:
-- Azure Functions HTTP trigger: https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-http-webhook-trigger
-- Node.js Azure Functions reference: https://learn.microsoft.com/en-us/azure/azure-functions/functions-reference-node
-- Azure AI Vision Read API: https://learn.microsoft.com/en-us/rest/api/computervision/read/read?view=rest-computervision-v3.1
+Source references:
+- Azure Functions Blob trigger: https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-storage-blob-trigger
+- Azure Functions Node.js reference: https://learn.microsoft.com/en-us/azure/azure-functions/functions-reference-node
 
-### OCR Function Structure
+### OCR Function Files
 
-```text
-ocr-function-app/
-|-- host.json
-|-- package.json
-|-- local.settings.json
-`-- OcrHttpTrigger/
-    |-- function.json
-    `-- index.js
-```
+Sample blob-trigger function files are included under [azure-functions/pdf-ocr-blob-trigger](C:/Users/Admin/Desktop/Insurance/azure-functions/pdf-ocr-blob-trigger):
 
-### `function.json`
+- [host.json](C:/Users/Admin/Desktop/Insurance/azure-functions/pdf-ocr-blob-trigger/host.json)
+- [package.json](C:/Users/Admin/Desktop/Insurance/azure-functions/pdf-ocr-blob-trigger/package.json)
+- [local.settings.json.example](C:/Users/Admin/Desktop/Insurance/azure-functions/pdf-ocr-blob-trigger/local.settings.json.example)
+- [PdfOcrBlobTrigger/function.json](C:/Users/Admin/Desktop/Insurance/azure-functions/pdf-ocr-blob-trigger/PdfOcrBlobTrigger/function.json)
+- [PdfOcrBlobTrigger/index.js](C:/Users/Admin/Desktop/Insurance/azure-functions/pdf-ocr-blob-trigger/PdfOcrBlobTrigger/index.js)
+
+### Blob Trigger `function.json`
 
 ```json
 {
   "bindings": [
     {
-      "authLevel": "function",
-      "type": "httpTrigger",
+      "name": "inputBlob",
+      "type": "blobTrigger",
       "direction": "in",
-      "name": "req",
-      "methods": ["post"],
-      "route": "ocr"
-    },
-    {
-      "type": "http",
-      "direction": "out",
-      "name": "res"
+      "path": "insurance-documents/{name}",
+      "connection": "AzureWebJobsStorage"
     }
   ]
 }
 ```
 
-### `index.js`
+### What The Function Does
 
-```javascript
-const axios = require('axios');
+- reads the uploaded PDF from Blob Storage
+- extracts text with `pdf-parse`
+- writes OCR state to the `ocrresults` collection
+- updates the matching insurance application using `documents.blobName`
+- recalculates top-level `ocrStatus`, `ocrText`, and `ocrProcessedAt`
 
-module.exports = async function (context, req) {
-  try {
-    const documentUrl = req.body?.documentUrl;
+See [PdfOcrBlobTrigger/index.js](C:/Users/Admin/Desktop/Insurance/azure-functions/pdf-ocr-blob-trigger/PdfOcrBlobTrigger/index.js:1).
 
-    if (!documentUrl) {
-      context.res = {
-        status: 400,
-        body: {
-          success: false,
-          message: 'documentUrl is required'
-        }
-      };
-      return;
-    }
+## Steps To Create OCR Function In Azure
 
-    const endpoint = process.env.AZURE_VISION_ENDPOINT;
-    const key = process.env.AZURE_VISION_KEY;
+1. Create or reuse the storage account that contains the `insurance-documents` container.
+2. Create an Azure Function App using Node.js.
+3. Add a Blob Trigger function.
+4. Copy the sample files from `azure-functions/pdf-ocr-blob-trigger` into the Function App project.
+5. Install dependencies:
 
-    if (!endpoint || !key) {
-      context.res = {
-        status: 500,
-        body: {
-          success: false,
-          message: 'Azure Vision settings are missing'
-        }
-      };
-      return;
-    }
-
-    const submitResponse = await axios.post(
-      `${endpoint}/vision/v3.1/read/analyze`,
-      { url: documentUrl },
-      {
-        headers: {
-          'Ocp-Apim-Subscription-Key': key,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    const operationLocation = submitResponse.headers['operation-location'];
-
-    if (!operationLocation) {
-      context.res = {
-        status: 500,
-        body: {
-          success: false,
-          message: 'OCR operation location was not returned'
-        }
-      };
-      return;
-    }
-
-    let result;
-    let attempts = 0;
-
-    while (attempts < 15) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      const pollResponse = await axios.get(operationLocation, {
-        headers: {
-          'Ocp-Apim-Subscription-Key': key
-        }
-      });
-
-      result = pollResponse.data;
-
-      if (result.status === 'succeeded' || result.status === 'failed') {
-        break;
-      }
-
-      attempts += 1;
-    }
-
-    if (!result || result.status !== 'succeeded') {
-      context.res = {
-        status: 500,
-        body: {
-          success: false,
-          message: 'OCR processing failed or timed out',
-          result
-        }
-      };
-      return;
-    }
-
-    const extractedText =
-      result.analyzeResult?.readResults
-        ?.flatMap((page) => page.lines.map((line) => line.text))
-        .join('\n') || '';
-
-    context.res = {
-      status: 200,
-      body: {
-        success: true,
-        extractedText,
-        raw: result
-      }
-    };
-  } catch (error) {
-    context.log('OCR function failed', error.message);
-    context.res = {
-      status: 500,
-      body: {
-        success: false,
-        message: error.response?.data || error.message
-      }
-    };
-  }
-};
+```bash
+cd azure-functions/pdf-ocr-blob-trigger
+npm install
 ```
 
-### OCR Function `package.json`
-
-```json
-{
-  "name": "ocr-function-app",
-  "version": "1.0.0",
-  "private": true,
-  "main": "index.js",
-  "scripts": {
-    "start": "func start"
-  },
-  "dependencies": {
-    "axios": "^1.7.7"
-  }
-}
-```
-
-### `host.json`
-
-```json
-{
-  "version": "2.0"
-}
-```
-
-### `local.settings.json`
+6. Configure local settings for testing:
 
 ```json
 {
@@ -484,69 +355,61 @@ module.exports = async function (context, req) {
   "Values": {
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "node",
-    "AZURE_VISION_ENDPOINT": "https://<your-vision-resource>.cognitiveservices.azure.com",
-    "AZURE_VISION_KEY": "<your-vision-key>"
+    "COSMOS_DB_URI": "mongodb://localhost:27017/insurance-management",
+    "COSMOS_DB_NAME": "insurance-management",
+    "OCR_RESULTS_COLLECTION": "ocrresults",
+    "APPLICATIONS_COLLECTION": "applications"
   }
 }
 ```
 
-## Steps To Do OCR Using Azure Functions
-
-1. Create an Azure AI Vision resource in Azure Portal.
-2. Copy the endpoint and key from the Azure AI Vision resource.
-3. Install Azure Functions Core Tools locally.
-4. Create a new Node.js Azure Function app.
-5. Add the `function.json`, `index.js`, `host.json`, and `package.json` shown above.
-6. Add `AZURE_VISION_ENDPOINT` and `AZURE_VISION_KEY` to `local.settings.json` for local testing.
 7. Start the function locally:
 
 ```bash
 func start
 ```
 
-8. Call the function locally:
+8. Upload a PDF into the `insurance-documents` container to trigger OCR automatically.
 
-```bash
-curl -X POST http://localhost:7071/api/ocr \
-  -H "Content-Type: application/json" \
-  -d "{\"documentUrl\":\"https://example.com/sample.pdf\"}"
+9. In Azure, set these Function App settings:
+
+```env
+AzureWebJobsStorage=<your-storage-connection-string>
+FUNCTIONS_WORKER_RUNTIME=node
+COSMOS_DB_URI=<your-cosmos-mongo-connection-string>
+COSMOS_DB_NAME=insurance-management
+OCR_RESULTS_COLLECTION=ocrresults
+APPLICATIONS_COLLECTION=applications
 ```
 
-9. Deploy the function to Azure:
+10. Deploy the Function App:
 
 ```bash
 func azure functionapp publish <your-function-app-name>
 ```
 
-10. In Azure, set the same app settings on the Function App:
-   - `AZURE_VISION_ENDPOINT`
-   - `AZURE_VISION_KEY`
-   - copy the function URL or function host + route
-   - copy the function key if the function uses `authLevel: function`
-
-11. Update the backend application settings:
+11. Ensure the backend App Service uses the same Blob container and Cosmos DB database:
 
 ```env
-AZURE_OCR_FUNCTION_URL=https://<your-function-app>.azurewebsites.net/api/ocr
-AZURE_OCR_FUNCTION_KEY=<your-function-key>
+AZURE_STORAGE_CONNECTION_STRING=<your-storage-connection-string>
+AZURE_CONTAINER_NAME=insurance-documents
+COSMOS_DB_URI=<your-cosmos-mongo-connection-string>
 ```
 
-12. If your documents are already uploaded to Blob Storage, pass the Blob URL to the OCR function instead of uploading the same file again.
-
-13. Restart the backend after adding the OCR settings.
-
-14. Upload a PDF through the insurance application UI. The backend will:
-   - upload the PDF to Blob Storage
-   - call the Azure OCR Function automatically
-   - attach the OCR response to the uploaded document metadata
+12. Upload a PDF through the insurance UI and verify:
+   - upload returns document metadata with `ocrStatus: PENDING`
+   - the blob trigger runs
+   - OCR text is stored in Cosmos DB
+   - the application record changes to `COMPLETED` or `FAILED`
+   - Admin Dashboard and Application Reviews show the OCR status
 
 ## OCR Integration Notes
 
-- The sample above uses the Azure AI Vision Read API for OCR.
-- The backend currently triggers OCR only for PDF uploads. JPG, JPEG, and PNG files are uploaded normally without OCR.
-- If your documents are mostly forms, invoices, or structured PDFs, Azure AI Document Intelligence may be a better fit than plain OCR.
-- If your Blob URLs are private, use SAS URLs or let the function download the blob using Azure Storage credentials before sending it to Azure AI Vision.
-- For private Azure architectures, the Function App and Vision resource may also need private networking and DNS alignment.
+- The backend no longer calls an OCR endpoint directly.
+- OCR starts when the blob is created in Azure Storage.
+- The upload API only sets the initial OCR state for PDFs.
+- The sample function uses `pdf-parse`, which is appropriate for machine-readable PDFs.
+- Because uploads happen before the application submit call, the function also stores OCR state in a dedicated `ocrresults` collection so the backend can merge completed OCR output even if the blob finishes processing before the application record is created.
 
 ## Docker Setup
 

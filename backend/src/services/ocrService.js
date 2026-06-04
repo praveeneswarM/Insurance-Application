@@ -1,74 +1,89 @@
-const env = require('../config/env');
+const OCR_STATUSES = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED'
+};
 
 const isPdf = (mimeType, fileName = '') =>
   mimeType === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
 
-const buildHeaders = () => {
-  const headers = {
-    'Content-Type': 'application/json'
-  };
-
-  if (env.azureOcrFunctionKey) {
-    headers['x-functions-key'] = env.azureOcrFunctionKey;
-  }
-
-  return headers;
-};
-
-const extractOcrTextFromResponse = (payload) => {
-  if (!payload) return '';
-  if (typeof payload.text === 'string') return payload.text;
-  if (typeof payload.extractedText === 'string') return payload.extractedText;
-  if (Array.isArray(payload.lines)) return payload.lines.join('\n');
-  return '';
-};
-
-const runPdfOcr = async ({ documentUrl, fileName, documentName }) => {
-  if (!env.azureOcrFunctionUrl) {
+const getInitialDocumentOcrState = ({ mimeType, fileName }) => {
+  if (!isPdf(mimeType, fileName)) {
     return {
-      attempted: false,
-      status: 'skipped',
-      message: 'OCR function is not configured'
-    };
-  }
-
-  if (!documentUrl || documentUrl.includes('local-storage.invalid')) {
-    return {
-      attempted: false,
-      status: 'skipped',
-      message: 'OCR requires a reachable blob URL'
-    };
-  }
-
-  const response = await fetch(env.azureOcrFunctionUrl, {
-    method: 'POST',
-    headers: buildHeaders(),
-    body: JSON.stringify({
-      documentUrl,
-      fileName,
-      documentName
-    })
-  });
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    return {
-      attempted: true,
-      status: 'failed',
-      message: payload.message || 'OCR function call failed'
+      ocrStatus: null,
+      ocrText: '',
+      ocrProcessedAt: null
     };
   }
 
   return {
-    attempted: true,
-    status: payload.success === false ? 'failed' : 'completed',
-    message: payload.message || '',
-    extractedText: extractOcrTextFromResponse(payload)
+    ocrStatus: OCR_STATUSES.PENDING,
+    ocrText: '',
+    ocrProcessedAt: null
+  };
+};
+
+const latestProcessedAt = (documents) =>
+  documents
+    .map((document) => document.ocrProcessedAt)
+    .filter(Boolean)
+    .sort((left, right) => new Date(left) - new Date(right))
+    .at(-1) || null;
+
+const deriveApplicationOcrState = (documents = []) => {
+  const pdfDocuments = documents.filter((document) => isPdf(document.mimeType, document.fileName));
+
+  if (!pdfDocuments.length) {
+    return {
+      ocrStatus: OCR_STATUSES.COMPLETED,
+      ocrText: '',
+      ocrProcessedAt: null
+    };
+  }
+
+  const statuses = pdfDocuments.map((document) => document.ocrStatus || OCR_STATUSES.PENDING);
+
+  if (statuses.includes(OCR_STATUSES.PROCESSING)) {
+    return {
+      ocrStatus: OCR_STATUSES.PROCESSING,
+      ocrText: '',
+      ocrProcessedAt: null
+    };
+  }
+
+  if (statuses.includes(OCR_STATUSES.PENDING)) {
+    return {
+      ocrStatus: OCR_STATUSES.PENDING,
+      ocrText: '',
+      ocrProcessedAt: null
+    };
+  }
+
+  if (statuses.includes(OCR_STATUSES.FAILED)) {
+    return {
+      ocrStatus: OCR_STATUSES.FAILED,
+      ocrText: pdfDocuments
+        .filter((document) => document.ocrText)
+        .map((document) => `[${document.name}] ${document.ocrText}`)
+        .join('\n\n'),
+      ocrProcessedAt: latestProcessedAt(pdfDocuments)
+    };
+  }
+
+  return {
+    ocrStatus: OCR_STATUSES.COMPLETED,
+    ocrText: pdfDocuments
+      .filter((document) => document.ocrText)
+      .map((document) => `[${document.name}] ${document.ocrText}`)
+      .join('\n\n'),
+    ocrProcessedAt: latestProcessedAt(pdfDocuments)
   };
 };
 
 module.exports = {
+  OCR_STATUSES,
   isPdf,
-  runPdfOcr
+  getInitialDocumentOcrState,
+  deriveApplicationOcrState
 };

@@ -24,6 +24,10 @@ const AdminDashboardPage = () => {
         <StatCard label="Pending" value={metrics.pendingApplications || 0} />
         <StatCard label="Approved" value={metrics.approvedApplications || 0} />
         <StatCard label="Rejected" value={metrics.rejectedApplications || 0} />
+        <StatCard label="OCR Pending" value={metrics.pendingOcr || 0} />
+        <StatCard label="OCR Processing" value={metrics.processingOcr || 0} />
+        <StatCard label="OCR Completed" value={metrics.completedOcr || 0} />
+        <StatCard label="OCR Failed" value={metrics.failedOcr || 0} />
       </div>
       <div className="grid gap-6 xl:grid-cols-2">
         <div className="glass rounded-[2rem] p-6">

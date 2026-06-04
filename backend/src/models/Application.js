@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { applicationStatuses } = require('../utils/constants');
+const { OCR_STATUSES } = require('../services/ocrService');
 
 const documentSchema = new mongoose.Schema(
   {
@@ -9,12 +10,9 @@ const documentSchema = new mongoose.Schema(
     size: { type: Number, required: true },
     url: { type: String, required: true },
     blobName: { type: String, required: true },
-    ocr: {
-      attempted: { type: Boolean, default: false },
-      status: { type: String, default: 'not_applicable' },
-      message: { type: String, default: '' },
-      extractedText: { type: String, default: '' }
-    }
+    ocrStatus: { type: String, enum: Object.values(OCR_STATUSES), default: null },
+    ocrText: { type: String, default: '' },
+    ocrProcessedAt: { type: Date, default: null }
   },
   { _id: false }
 );
@@ -26,6 +24,9 @@ const applicationSchema = new mongoose.Schema(
     age: { type: Number, required: true },
     premium: { type: Number, required: true },
     documents: [documentSchema],
+    ocrStatus: { type: String, enum: Object.values(OCR_STATUSES), default: OCR_STATUSES.PENDING },
+    ocrText: { type: String, default: '' },
+    ocrProcessedAt: { type: Date, default: null },
     status: { type: String, enum: applicationStatuses, default: 'Pending' },
     adminComments: { type: String, default: '' },
     submittedAt: { type: Date, default: Date.now }

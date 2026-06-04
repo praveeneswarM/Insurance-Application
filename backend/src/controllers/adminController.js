@@ -3,15 +3,31 @@ const InsurancePlan = require('../models/InsurancePlan');
 const Application = require('../models/Application');
 const AuditLog = require('../models/AuditLog');
 const asyncHandler = require('../middlewares/asyncHandler');
+const { OCR_STATUSES } = require('../services/ocrService');
 
 const getDashboard = asyncHandler(async (req, res) => {
-  const [totalUsers, totalPlans, totalApplications, pendingApplications, approvedApplications, rejectedApplications] = await Promise.all([
+  const [
+    totalUsers,
+    totalPlans,
+    totalApplications,
+    pendingApplications,
+    approvedApplications,
+    rejectedApplications,
+    pendingOcr,
+    processingOcr,
+    completedOcr,
+    failedOcr
+  ] = await Promise.all([
     User.countDocuments(),
     InsurancePlan.countDocuments(),
     Application.countDocuments(),
     Application.countDocuments({ status: 'Pending' }),
     Application.countDocuments({ status: 'Approved' }),
-    Application.countDocuments({ status: 'Rejected' })
+    Application.countDocuments({ status: 'Rejected' }),
+    Application.countDocuments({ ocrStatus: OCR_STATUSES.PENDING }),
+    Application.countDocuments({ ocrStatus: OCR_STATUSES.PROCESSING }),
+    Application.countDocuments({ ocrStatus: OCR_STATUSES.COMPLETED }),
+    Application.countDocuments({ ocrStatus: OCR_STATUSES.FAILED })
   ]);
 
   const monthlyApplications = await Application.aggregate([
@@ -48,7 +64,11 @@ const getDashboard = asyncHandler(async (req, res) => {
       totalApplications,
       pendingApplications,
       approvedApplications,
-      rejectedApplications
+      rejectedApplications,
+      pendingOcr,
+      processingOcr,
+      completedOcr,
+      failedOcr
     },
     charts: {
       monthlyApplications,

@@ -1,9 +1,11 @@
 const Application = require('../models/Application');
 const InsurancePlan = require('../models/InsurancePlan');
+const OcrResult = require('../models/OcrResult');
 const asyncHandler = require('../middlewares/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const { calculatePremium } = require('../services/premiumCalculator');
 const { createAuditLog } = require('../services/auditService');
+const { deriveApplicationOcrState, getInitialDocumentOcrState } = require('../services/ocrService');
 
 const createApplication = asyncHandler(async (req, res) => {
   const plan = await InsurancePlan.findById(req.body.planId);
@@ -15,12 +17,39 @@ const createApplication = asyncHandler(async (req, res) => {
   }
 
   const premium = calculatePremium(plan.basePremium, req.body.age);
+  const uploadedDocuments = req.body.documents.map((document) => ({
+    ...getInitialDocumentOcrState({
+      mimeType: document.mimeType,
+      fileName: document.fileName
+    }),
+    ...document
+  }));
+  const blobNames = uploadedDocuments.map((document) => document.blobName);
+  const ocrResults = await OcrResult.find({ blobName: { $in: blobNames } }).lean();
+  const ocrResultMap = new Map(ocrResults.map((result) => [result.blobName, result]));
+  const documents = uploadedDocuments.map((document) => {
+    const ocrResult = ocrResultMap.get(document.blobName);
+    if (!ocrResult) {
+      return document;
+    }
+
+    return {
+      ...document,
+      ocrStatus: ocrResult.ocrStatus,
+      ocrText: ocrResult.ocrText,
+      ocrProcessedAt: ocrResult.ocrProcessedAt
+    };
+  });
+  const ocrState = deriveApplicationOcrState(documents);
   const application = await Application.create({
     userId: req.user._id,
     planId: plan._id,
     age: req.body.age,
     premium,
-    documents: req.body.documents
+    documents,
+    ocrStatus: ocrState.ocrStatus,
+    ocrText: ocrState.ocrText,
+    ocrProcessedAt: ocrState.ocrProcessedAt
   });
 
   res.status(201).json({ success: true, application });

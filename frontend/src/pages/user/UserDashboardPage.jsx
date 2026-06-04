@@ -27,6 +27,7 @@ const UserDashboardPage = () => {
             <h3 className="text-2xl font-semibold">{application.planId?.planName}</h3>
             <p className="mt-2 text-white/70">Premium: {currency(application.premium)}</p>
             <p className="mt-2 text-white/70">Status: {application.status}</p>
+            <p className="mt-2 text-white/70">OCR: {application.ocrStatus}</p>
           </div>
         ))}
       </div>
